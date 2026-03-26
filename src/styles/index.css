@@ -1,0 +1,24 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+/* Custom scrollbar styles */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom input date/time styling for dark mode */
+input[type="date"],
+input[type="time"] {
+  color-scheme: dark;
+}

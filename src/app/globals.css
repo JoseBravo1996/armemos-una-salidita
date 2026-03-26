@@ -1,0 +1,48 @@
+@import '../styles/fonts.css';
+@import 'mapbox-gl/dist/mapbox-gl.css';
+@import 'tailwindcss';
+@source "../**/*.{js,ts,jsx,tsx}";
+@import 'tw-animate-css';
+@import '../styles/theme.css';
+
+/* Custom scrollbar styles */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+input[type='date'],
+input[type='time'] {
+  color-scheme: dark;
+}
+
+/*
+ * Mapbox: @layer base aplica border a * — quitar solo en el mapa.
+ * No forzar width/height del canvas: Mapbox setea tamaño en píxeles vía JS;
+ * forzar 100% en CSS rompe el viewport WebGL (mapa negro con red OK).
+ */
+.map-view-mapbox .mapboxgl-map,
+.map-view-mapbox .mapboxgl-canvas-container,
+.map-view-mapbox .mapboxgl-canvas {
+  border: none !important;
+  outline: none;
+}
+
+.map-view-mapbox .mapboxgl-map,
+.map-view-mapbox .mapboxgl-canvas-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* Controles debajo del header flotante del mapa */
+.map-view-mapbox .mapboxgl-ctrl-top-right {
+  top: 7.5rem;
+}
