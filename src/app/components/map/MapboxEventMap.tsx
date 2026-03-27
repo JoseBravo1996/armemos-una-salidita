@@ -218,13 +218,17 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
 
         mapboxgl.accessToken = token;
 
+        const coarsePointer =
+          typeof window !== 'undefined' &&
+          window.matchMedia?.('(pointer: coarse)')?.matches;
         const map = new mapboxgl.Map({
           container: el,
           style: 'mapbox://styles/mapbox/dark-v11',
           center: BUENOS_AIRES_CENTER,
           zoom: embed ? 11.5 : 12,
           attributionControl: true,
-          antialias: true,
+          // antialias en mobile suele romper o empeorar WebGL en algunos GPU / Safari
+          antialias: !coarsePointer,
           dragRotate: false,
           pitchWithRotate: false,
           cooperativeGestures: embed,
@@ -254,20 +258,62 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
         resizeObserverRef.current = ro;
         ro.observe(el);
 
+        const nudgeResize = () => {
+          try {
+            map.resize();
+          } catch {
+            /* noop */
+          }
+          requestAnimationFrame(() => {
+            try {
+              map.resize();
+            } catch {
+              /* noop */
+            }
+          });
+        };
+
+        const onWinResize = () => nudgeResize();
+        const onOrientation = () => {
+          window.setTimeout(nudgeResize, 200);
+          window.setTimeout(nudgeResize, 600);
+        };
+        const onVisibility = () => {
+          if (document.visibilityState === 'visible') {
+            window.setTimeout(nudgeResize, 0);
+            window.setTimeout(nudgeResize, 300);
+          }
+        };
+
+        window.addEventListener('resize', onWinResize);
+        window.addEventListener('orientationchange', onOrientation);
+        document.addEventListener('visibilitychange', onVisibility);
+        const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+        if (vv) vv.addEventListener('resize', onWinResize);
+
         const onLoad = () => {
-          map.resize();
+          nudgeResize();
           syncMarkers(map, markersDataRef.current, mapboxgl.Marker);
           const t = cameraTargetRef.current;
           const fb = fitBoundsRef.current;
           if (t) flyTo(map, t);
           else if (fb) applyFitBounds(map, fb);
+          window.setTimeout(nudgeResize, 100);
+          window.setTimeout(nudgeResize, 500);
         };
         map.once('load', onLoad);
 
         const onIdle = () => {
-          map.resize();
+          nudgeResize();
         };
         map.once('idle', onIdle);
+
+        (map as MapboxMap & { __ausCleanup?: () => void }).__ausCleanup = () => {
+          window.removeEventListener('resize', onWinResize);
+          window.removeEventListener('orientationchange', onOrientation);
+          document.removeEventListener('visibilitychange', onVisibility);
+          if (vv) vv.removeEventListener('resize', onWinResize);
+        };
       })();
 
       return () => {
@@ -279,6 +325,12 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
         const map = mapRef.current;
         mapRef.current = null;
         if (map) {
+          const extra = map as MapboxMap & { __ausCleanup?: () => void };
+          try {
+            extra.__ausCleanup?.();
+          } catch {
+            /* noop */
+          }
           try {
             map.remove();
           } catch {

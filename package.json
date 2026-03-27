@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "import:osm": "node ./scripts/import-osm-places.mjs",
-    "import:osm:metro": "node ./scripts/import-osm-places.mjs --preset caba-gba --pause-ms 1500 --limit 350"
+    "import:osm:metro": "node ./scripts/import-osm-places.mjs --preset caba-gba --pause-ms 1500 --limit 350",
+    "dedupe:places:osm": "node ./scripts/dedupe-osm-places.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

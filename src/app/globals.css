@@ -42,6 +42,14 @@ input[type='time'] {
   height: 100%;
 }
 
+/* iOS / Chrome móvil: capa compuesta; reduce mapa WebGL vacío con marcadores visibles */
+.map-view-mapbox {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
 /* Controles debajo del header flotante del mapa */
 .map-view-mapbox .mapboxgl-ctrl-top-right {
   top: 7.5rem;

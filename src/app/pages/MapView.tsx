@@ -294,7 +294,7 @@ export function MapView() {
         />
       )}
 
-      <div className="relative h-[100dvh] min-h-0 w-full shrink-0">
+      <div className="relative h-[100svh] min-h-0 w-full shrink-0 md:h-[100dvh]">
         {catalogLoading && (
           <div className="absolute inset-0 z-[15] flex items-center justify-center bg-[#0a0a0f]/70 text-sm text-gray-400">
             Cargando eventos…

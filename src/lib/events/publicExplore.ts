@@ -86,15 +86,16 @@ export async function fetchPublicEvents(): Promise<Event[]> {
 }
 
 export async function fetchPlacesForMap(): Promise<PlaceMapRow[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from('places')
-    .select('id, name, address, latitude, longitude, event_count')
-    .order('event_count', { ascending: false });
+               const supabase = createClient();
+               const { data, error } = await supabase
+                 .from('places')
+                 .select('id, name, address, latitude, longitude, event_count')
+                 .order('event_count', { ascending: false })
+                 .order('popularity_score', { ascending: false });
 
-  if (error) throw error;
-  return (data ?? []) as PlaceMapRow[];
-}
+               if (error) throw error;
+               return (data ?? []) as PlaceMapRow[];
+             }
 
 export async function fetchExploreZones(): Promise<ExploreZoneRow[]> {
   const supabase = createClient();

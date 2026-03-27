@@ -140,6 +140,31 @@ function normalizeAddress(tags, lat, lng) {
   return `${(lat ?? 0).toFixed(5)}, ${(lng ?? 0).toFixed(5)}`;
 }
 
+/** Heurística para ordenar pins “destacados” (0–100). */
+function popularityFromTags(tags) {
+  const amenity = tags.amenity ?? '';
+  const base =
+    {
+      nightclub: 28,
+      bar: 20,
+      pub: 18,
+      restaurant: 22,
+      cafe: 16,
+      fast_food: 12,
+    }[amenity] ?? 8;
+  let bonus = 0;
+  if (tags.outdoor_seating === 'yes') bonus += 4;
+  if (tags.delivery === 'yes') bonus += 2;
+  if (tags.takeaway === 'yes') bonus += 1;
+  if (tags.wheelchair === 'yes') bonus += 1;
+  if (tags.internet_access === 'yes' || tags.internet_access === 'wlan') bonus += 2;
+  const cuisine = tags.cuisine;
+  if (typeof cuisine === 'string') {
+    bonus += Math.min(6, cuisine.split(';').filter(Boolean).length * 2);
+  }
+  return Math.min(100, base + bonus);
+}
+
 function toPlaceRow(el) {
   const lat = el.lat ?? el.center?.lat;
   const lng = el.lon ?? el.center?.lon;
@@ -149,6 +174,7 @@ function toPlaceRow(el) {
   const sourceRef = `${el.type}/${el.id}`;
   const name = tags.name?.trim() || `${amenity} ${el.id}`;
   const address = normalizeAddress(tags, lat, lng);
+  const popularity_score = popularityFromTags(tags);
   return {
     name,
     address,
@@ -158,6 +184,7 @@ function toPlaceRow(el) {
     source_ref: sourceRef,
     source_payload: tags,
     mapbox_feature_types: ['osm', `amenity:${amenity}`],
+    popularity_score,
     last_synced_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -176,6 +203,9 @@ async function main() {
   const retry = Number(args.retry ?? '3');
   const retryBaseMs = Number(args['retry-base-ms'] ?? '1500');
   const timeoutSec = Number(args.timeout ?? '25');
+  const resumeFrom = Number(args['resume-from'] ?? '0');
+  const maxZones =
+    args['max-zones'] !== undefined ? Number(args['max-zones']) : null;
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -186,16 +216,37 @@ async function main() {
   }
 
   const supabase = createClient(supabaseUrl, serviceRole);
-  const zones = preset
+  const fullList = preset
     ? PRESETS[preset] ?? (() => { throw new Error(`Preset desconocido: ${preset}`); })()
     : [{ name: 'single', lat, lng, radius }];
+  const fullZoneCount = fullList.length;
+
+  let zones = fullList;
+  if (resumeFrom > 0) {
+    if (resumeFrom >= zones.length) {
+      throw new Error(
+        `--resume-from ${resumeFrom} fuera de rango (zonas=${zones.length})`
+      );
+    }
+    zones = zones.slice(resumeFrom);
+    console.log(
+      `Reanudando desde zona índice ${resumeFrom} (${zones.length} restantes de ${fullZoneCount})`
+    );
+  }
+  if (maxZones !== null && Number.isFinite(maxZones) && maxZones > 0) {
+    zones = zones.slice(0, maxZones);
+    console.log(`Modo parcial: máximo ${maxZones} zona(s)`);
+  }
 
   let grandElements = 0;
   let grandRows = 0;
   let grandUpsert = 0;
 
+  const globalIndexStart = preset ? resumeFrom : 0;
+
   for (let i = 0; i < zones.length; i += 1) {
     const zone = zones[i];
+    const globalIdx = globalIndexStart + i;
     let elements = [];
 
     try {
@@ -214,7 +265,7 @@ async function main() {
       elements = Array.isArray(body.elements) ? body.elements : [];
     } catch (errAll) {
       console.warn(
-        `[${i + 1}/${zones.length}] ${zone.name}: fallo bloque completo, probando por amenity…`
+        `[${globalIdx + 1}/${fullZoneCount}] ${zone.name}: fallo bloque completo, probando por amenity…`
       );
       const collected = [];
       for (const amenity of DEFAULT_AMENITIES) {
@@ -235,7 +286,7 @@ async function main() {
           await sleep(300);
         } catch (errAmenity) {
           console.warn(
-            `[${i + 1}/${zones.length}] ${zone.name}: amenity=${amenity} omitido (${errAmenity?.message ?? errAmenity})`
+            `[${globalIdx + 1}/${fullZoneCount}] ${zone.name}: amenity=${amenity} omitido (${errAmenity?.message ?? errAmenity})`
           );
         }
       }
@@ -255,7 +306,7 @@ async function main() {
     grandRows += rows.length;
 
     console.log(
-      `[${i + 1}/${zones.length}] ${zone.name}: elementos=${uniqueElements.length}, normalizados=${rows.length}`
+      `[${globalIdx + 1}/${fullZoneCount}] ${zone.name}: elementos=${uniqueElements.length}, normalizados=${rows.length}`
     );
 
     if (!dryRun && rows.length > 0) {
