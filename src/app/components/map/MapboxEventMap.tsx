@@ -2,23 +2,32 @@
 
 import {
   forwardRef,
-  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
   useState,
 } from 'react';
 import type { Map as MapboxMap } from 'mapbox-gl';
+import type { MapPinCategory } from '@/lib/map/inferPlacePinCategory';
+import { categoryCircleColorExpr } from '@/lib/map/mapPinPalette';
 
 /** Mapbox usa [longitud, latitud] */
 const BUENOS_AIRES_CENTER: [number, number] = [-58.3816, -34.6037];
+
+const CLUSTER_SOURCE = 'aus-markers';
+const CLUSTER_CIRCLES = 'aus-clusters';
+const CLUSTER_COUNT = 'aus-cluster-count';
+const UNCLUSTERED = 'aus-unclustered';
+
+const HIGHLIGHT_NONE = '__aus_no_selection__';
 
 export interface MapboxMapMarker {
   id: string;
   latitude: number;
   longitude: number;
-  /** `place` = pin de catálogo `places` (teal); por defecto evento (violeta). */
   kind?: 'event' | 'place';
+  /** Tipo visual del pin (evento o lugar deducido de OSM). */
+  category?: MapPinCategory;
 }
 
 export interface MapboxEventMapCameraTarget {
@@ -46,6 +55,8 @@ export interface MapboxEventMapProps {
   cameraTarget?: MapboxEventMapCameraTarget | null;
   /** Encuadra una zona; ignorado si `cameraTarget` está definido. */
   fitBounds?: MapboxEventMapFitBounds | null;
+  /** Resalta un punto por su `id` completo (p. ej. `evt:…` / `plc:…`). */
+  highlightedMarkerId?: string | null;
 }
 
 export type MapboxEventMapHandle = {
@@ -53,43 +64,22 @@ export type MapboxEventMapHandle = {
   recenterOnUser: () => Promise<void>;
 };
 
-function createPinElement(
-  onClick: () => void,
-  kind: 'event' | 'place' = 'event'
-): HTMLButtonElement {
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className =
-    'relative flex h-10 w-10 cursor-pointer items-center justify-center border-0 bg-transparent p-0 outline-none';
-  btn.setAttribute(
-    'aria-label',
-    kind === 'place' ? 'Ver lugar en el mapa' : 'Ver evento en el mapa'
-  );
-
-  const pulse = document.createElement('div');
-  pulse.className =
-    kind === 'place'
-      ? 'pointer-events-none absolute inset-0 rounded-full bg-teal-500 opacity-75 animate-ping'
-      : 'pointer-events-none absolute inset-0 rounded-full bg-purple-600 opacity-75 animate-ping';
-
-  const inner = document.createElement('div');
-  inner.className =
-    kind === 'place'
-      ? 'relative flex h-10 w-10 items-center justify-center rounded-full border-2 border-white/20 bg-gradient-to-br from-teal-500 to-cyan-600 shadow-lg'
-      : 'relative flex h-10 w-10 items-center justify-center rounded-full border-2 border-white/20 bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg';
-
-  inner.innerHTML =
-    kind === 'place'
-      ? '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>'
-      : '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>';
-
-  btn.appendChild(pulse);
-  btn.appendChild(inner);
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    onClick();
-  });
-  return btn;
+function markersToFeatureCollection(markers: MapboxMapMarker[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: markers.map((m) => ({
+      type: 'Feature',
+      properties: {
+        id: m.id,
+        kind: m.kind ?? 'event',
+        category: m.category ?? 'other',
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: [m.longitude, m.latitude],
+      },
+    })),
+  };
 }
 
 function flyTo(map: MapboxMap, target: MapboxEventMapCameraTarget) {
@@ -110,6 +100,118 @@ function applyFitBounds(map: MapboxMap, b: MapboxEventMapFitBounds) {
   );
 }
 
+function ensureClusterLayers(
+  map: MapboxMap,
+  mapboxgl: typeof import('mapbox-gl').default,
+  embed: boolean,
+  onMarkerClick: (id: string) => void
+) {
+  if (map.getSource(CLUSTER_SOURCE)) return;
+
+  map.addSource(CLUSTER_SOURCE, {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+    cluster: true,
+    clusterMaxZoom: embed ? 13 : 15,
+    clusterRadius: embed ? 42 : 54,
+  });
+
+  map.addLayer({
+    id: CLUSTER_CIRCLES,
+    type: 'circle',
+    source: CLUSTER_SOURCE,
+    filter: ['has', 'point_count'],
+    paint: {
+      'circle-color': 'rgba(129, 95, 218, 0.5)',
+      'circle-stroke-color': 'rgba(255,255,255,0.75)',
+      'circle-stroke-width': 2,
+      'circle-radius': ['step', ['get', 'point_count'], 16, 8, 20, 24, 24, 100, 30],
+    },
+  });
+
+  map.addLayer({
+    id: CLUSTER_COUNT,
+    type: 'symbol',
+    source: CLUSTER_SOURCE,
+    filter: ['has', 'point_count'],
+    layout: {
+      'text-field': ['get', 'point_count_abbreviated'],
+      'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+      'text-size': 12,
+    },
+    paint: {
+      'text-color': '#f8fafc',
+    },
+  });
+
+  map.addLayer({
+    id: UNCLUSTERED,
+    type: 'circle',
+    source: CLUSTER_SOURCE,
+    filter: ['!', ['has', 'point_count']],
+    paint: {
+      'circle-color': categoryCircleColorExpr(),
+      'circle-radius': 5,
+      'circle-stroke-width': 1.25,
+      'circle-stroke-color': 'rgba(255,255,255,0.9)',
+      'circle-opacity': 0.95,
+    },
+  });
+
+  map.on('click', CLUSTER_CIRCLES, (e) => {
+    const feats = map.queryRenderedFeatures(e.point, { layers: [CLUSTER_CIRCLES] });
+    const f = feats[0];
+    if (!f || f.geometry.type !== 'Point') return;
+    const clusterId = f.properties?.cluster_id;
+    const src = map.getSource(CLUSTER_SOURCE) as mapboxgl.GeoJSONSource;
+    if (typeof clusterId !== 'number') return;
+    src.getClusterExpansionZoom(clusterId, (err, zoom) => {
+      if (err != null || zoom == null) return;
+      const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+      map.easeTo({ center: coords, zoom, duration: 380, essential: true });
+    });
+  });
+
+  map.on('click', UNCLUSTERED, (e) => {
+    const feats = map.queryRenderedFeatures(e.point, { layers: [UNCLUSTERED] });
+    const id = feats[0]?.properties?.id;
+    if (typeof id === 'string') onMarkerClick(id);
+  });
+
+  const setPointer = () => {
+    map.getCanvas().style.cursor = 'pointer';
+  };
+  const clearPointer = () => {
+    map.getCanvas().style.cursor = '';
+  };
+  map.on('mouseenter', CLUSTER_CIRCLES, setPointer);
+  map.on('mouseleave', CLUSTER_CIRCLES, clearPointer);
+  map.on('mouseenter', UNCLUSTERED, setPointer);
+  map.on('mouseleave', UNCLUSTERED, clearPointer);
+}
+
+function setMarkerData(map: MapboxMap, markers: MapboxMapMarker[]) {
+  const src = map.getSource(CLUSTER_SOURCE) as import('mapbox-gl').GeoJSONSource | undefined;
+  if (src) src.setData(markersToFeatureCollection(markers));
+}
+
+function applyHighlight(map: MapboxMap, highlightedMarkerId: string | null | undefined) {
+  if (!map.getLayer(UNCLUSTERED)) return;
+  const hi = highlightedMarkerId && highlightedMarkerId.length > 0 ? highlightedMarkerId : HIGHLIGHT_NONE;
+  map.setPaintProperty(UNCLUSTERED, 'circle-radius', [
+    'case',
+    ['==', ['get', 'id'], hi],
+    9,
+    5,
+  ]);
+  map.setPaintProperty(UNCLUSTERED, 'circle-stroke-width', [
+    'case',
+    ['==', ['get', 'id'], hi],
+    2.75,
+    1.25,
+  ]);
+}
+
 export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapProps>(
   function MapboxEventMap(
     {
@@ -120,21 +222,23 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
       embed = false,
       cameraTarget = null,
       fitBounds = null,
+      highlightedMarkerId = null,
     },
     ref
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<MapboxMap | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
-    const markersRef = useRef<import('mapbox-gl').Marker[]>([]);
-    const markersDataRef = useRef(markers);
-    markersDataRef.current = markers;
+    const markersRef = useRef(markers);
+    markersRef.current = markers;
     const onMarkerClickRef = useRef(onMarkerClick);
     onMarkerClickRef.current = onMarkerClick;
     const cameraTargetRef = useRef(cameraTarget);
     cameraTargetRef.current = cameraTarget;
     const fitBoundsRef = useRef(fitBounds);
     fitBoundsRef.current = fitBounds;
+    const highlightedRef = useRef(highlightedMarkerId);
+    highlightedRef.current = highlightedMarkerId;
     const [mapError, setMapError] = useState<string | null>(null);
 
     useImperativeHandle(
@@ -180,29 +284,6 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
       []
     );
 
-    const syncMarkers = useCallback(
-      (
-        map: MapboxMap,
-        list: MapboxMapMarker[],
-        MarkerClass: typeof import('mapbox-gl').Marker
-      ) => {
-        markersRef.current.forEach((m) => m.remove());
-        markersRef.current = [];
-
-        list.forEach((item) => {
-          const el = createPinElement(
-            () => onMarkerClickRef.current?.(item.id),
-            item.kind ?? 'event'
-          );
-          const marker = new MarkerClass({ element: el, anchor: 'bottom' })
-            .setLngLat([item.longitude, item.latitude])
-            .addTo(map);
-          markersRef.current.push(marker);
-        });
-      },
-      []
-    );
-
     useEffect(() => {
       const token = accessToken?.trim();
       const el = containerRef.current;
@@ -227,7 +308,6 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
           center: BUENOS_AIRES_CENTER,
           zoom: embed ? 11.5 : 12,
           attributionControl: true,
-          // antialias en mobile suele romper o empeorar WebGL en algunos GPU / Safari
           antialias: !coarsePointer,
           dragRotate: false,
           pitchWithRotate: false,
@@ -293,7 +373,9 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
 
         const onLoad = () => {
           nudgeResize();
-          syncMarkers(map, markersDataRef.current, mapboxgl.Marker);
+          ensureClusterLayers(map, mapboxgl, embed, (id) => onMarkerClickRef.current?.(id));
+          setMarkerData(map, markersRef.current);
+          applyHighlight(map, highlightedRef.current);
           const t = cameraTargetRef.current;
           const fb = fitBoundsRef.current;
           if (t) flyTo(map, t);
@@ -320,8 +402,6 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
         cancelled = true;
         resizeObserverRef.current?.disconnect();
         resizeObserverRef.current = null;
-        markersRef.current.forEach((m) => m.remove());
-        markersRef.current = [];
         const map = mapRef.current;
         mapRef.current = null;
         if (map) {
@@ -338,7 +418,7 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
           }
         }
       };
-    }, [accessToken, embed, syncMarkers]);
+    }, [accessToken, embed]);
 
     useEffect(() => {
       const map = mapRef.current;
@@ -361,11 +441,14 @@ export const MapboxEventMap = forwardRef<MapboxEventMapHandle, MapboxEventMapPro
     useEffect(() => {
       const map = mapRef.current;
       if (!map?.isStyleLoaded()) return;
-      void import('mapbox-gl').then(({ default: mapboxgl }) => {
-        if (mapRef.current !== map || !map.isStyleLoaded()) return;
-        syncMarkers(map, markers, mapboxgl.Marker);
-      });
-    }, [markers, syncMarkers]);
+      setMarkerData(map, markers);
+    }, [markers]);
+
+    useEffect(() => {
+      const map = mapRef.current;
+      if (!map?.isStyleLoaded()) return;
+      applyHighlight(map, highlightedMarkerId);
+    }, [highlightedMarkerId]);
 
     const token = accessToken?.trim();
 

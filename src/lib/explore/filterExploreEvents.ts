@@ -1,6 +1,8 @@
 import type { Event } from '@/app/data/mockData';
 import type { ExploreCategoryFilterId } from '@/app/data/exploreCategories';
+import type { ExploreTimeFilterId } from '@/app/data/exploreCategories';
 import { CATEGORY_SEARCH_SYNONYMS } from '@/app/data/exploreCategories';
+import { isEventInPast } from '@/lib/events/eventSchedule';
 
 /** Texto comparable en búsquedas: minúsculas, sin tildes, espacios colapsados. */
 export function foldSearchText(value: string): string {
@@ -34,10 +36,20 @@ export function eventMatchesExploreSearch(event: Event, rawQuery: string): boole
 
 export function filterExploreEvents(
   list: Event[],
-  opts: { categoryId: ExploreCategoryFilterId; searchQuery: string }
+  opts: {
+    categoryId: ExploreCategoryFilterId;
+    searchQuery: string;
+    /** Por defecto solo **próximos** (no mostrar pasados). Usar `'all'` para ignorar fecha. */
+    timeFilter?: ExploreTimeFilterId | 'all';
+  }
 ): Event[] {
+  const timeFilter = opts.timeFilter ?? 'upcoming';
   return list.filter((e) => {
     if (opts.categoryId !== 'all' && e.category !== opts.categoryId) return false;
-    return eventMatchesExploreSearch(e, opts.searchQuery);
+    if (!eventMatchesExploreSearch(e, opts.searchQuery)) return false;
+    if (timeFilter === 'all') return true;
+    const past = isEventInPast(e);
+    if (timeFilter === 'upcoming') return !past;
+    return past;
   });
 }

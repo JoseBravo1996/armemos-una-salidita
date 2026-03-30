@@ -2,7 +2,7 @@
 
 import { motion } from 'motion/react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ExternalLink, MapPin, Navigation, X } from 'lucide-react';
+import { CalendarPlus, ExternalLink, MapPin, Navigation, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BottomNav } from '../components/BottomNav';
 import {
@@ -28,7 +28,6 @@ export function MapView() {
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<PlaceMapRow | null>(null);
   const [catalogPlaces, setCatalogPlaces] = useState<PlaceMapRow[]>([]);
-  const [showPlaces, setShowPlaces] = useState(false);
   const [activeFilter, setActiveFilter] = useState<ExploreCategoryChipId>('all');
   const [geoHint, setGeoHint] = useState<string | null>(null);
   const [headerDirectionsOpen, setHeaderDirectionsOpen] = useState(false);
@@ -53,17 +52,19 @@ export function MapView() {
       latitude: e.latitude,
       longitude: e.longitude,
       kind: 'event',
+      category: e.category,
     }));
-    const placeMarkers: MapboxMapMarker[] = showPlaces
-      ? catalogPlaces.map((p) => ({
-          id: `plc:${p.id}`,
-          latitude: p.latitude,
-          longitude: p.longitude,
-          kind: 'place',
-        }))
-      : [];
+    const placeMarkers: MapboxMapMarker[] = catalogPlaces
+      .filter((p) => activeFilter === 'all' || p.pinCategory === activeFilter)
+      .map((p) => ({
+        id: `plc:${p.id}`,
+        latitude: p.latitude,
+        longitude: p.longitude,
+        kind: 'place' as const,
+        category: p.pinCategory,
+      }));
     return [...eventMarkers, ...placeMarkers];
-  }, [activeFilter, selectedEvent, catalogEvents, showPlaces, catalogPlaces]);
+  }, [activeFilter, selectedEvent, catalogEvents, catalogPlaces]);
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -96,6 +97,8 @@ export function MapView() {
     : null;
 
   const eventParam = searchParams.get('event');
+  const placeParam = searchParams.get('place');
+
   useEffect(() => {
     if (!eventParam || catalogEvents.length === 0) return;
     const found = catalogEvents.find((e) => e.id === eventParam);
@@ -104,6 +107,27 @@ export function MapView() {
       setSelectedPlace(null);
     }
   }, [eventParam, catalogEvents]);
+
+  useEffect(() => {
+    if (!placeParam || catalogPlaces.length === 0) return;
+    const found = catalogPlaces.find((p) => p.id === placeParam);
+    if (found) {
+      setSelectedPlace(found);
+      setSelectedEvent(null);
+    }
+  }, [placeParam, catalogPlaces]);
+
+  /** Si el chip excluye el lugar seleccionado, cerrar ficha y quitar `?place=` de la URL. */
+  useEffect(() => {
+    if (!selectedPlace) return;
+    if (activeFilter === 'all' || selectedPlace.pinCategory === activeFilter) return;
+    setSelectedPlace(null);
+    const params = new URLSearchParams(searchParams.toString());
+    if (!params.has('place')) return;
+    params.delete('place');
+    const q = params.toString();
+    router.replace(q ? `/map?${q}` : '/map');
+  }, [activeFilter, selectedPlace, searchParams, router]);
 
   useEffect(() => {
     let cancelled = false;
@@ -221,50 +245,27 @@ export function MapView() {
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
             <span>
               {(() => {
-                const filtered = catalogEvents.filter(
+                const filteredEv = catalogEvents.filter(
                   (e) => activeFilter === 'all' || e.category === activeFilter
                 );
-                const nEv = filtered.length;
-                const nPl = showPlaces ? catalogPlaces.length : 0;
+                const nEv = filteredEv.length;
+                const nPl = catalogPlaces.filter(
+                  (p) => activeFilter === 'all' || p.pinCategory === activeFilter
+                ).length;
                 return (
                   <>
-                    {nEv} {nEv === 1 ? 'evento' : 'eventos'}
-                    {showPlaces && (
-                      <>
-                        {' '}
-                        · {nPl} {nPl === 1 ? 'lugar' : 'lugares'}
-                      </>
-                    )}{' '}
-                    en el mapa
+                    {nEv} {nEv === 1 ? 'evento' : 'eventos'} · {nPl}{' '}
+                    {nPl === 1 ? 'lugar' : 'lugares'} en el mapa
                     {activeFilter !== 'all' && ` · filtro activo`}
                   </>
                 );
               })()}
             </span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setShowPlaces((s) => {
-                    const next = !s;
-                    if (!next) setSelectedPlace(null);
-                    return next;
-                  })
-                }
-                className={`rounded-full px-3 py-1 text-[11px] font-medium transition-colors ${
-                  showPlaces
-                    ? 'bg-teal-600/90 text-white'
-                    : 'bg-[#16161d]/80 border border-[#2a2a3a] text-gray-300'
-                }`}
-              >
-                Lugares
-              </button>
-              {zoneFromUrl && activeFilter === 'all' && (
-                <span className="truncate text-purple-300/90" title={zoneFromUrl.name}>
-                  Zona: {zoneFromUrl.name}
-                </span>
-              )}
-            </div>
+            {zoneFromUrl && activeFilter === 'all' && (
+              <span className="truncate text-purple-300/90" title={zoneFromUrl.name}>
+                Zona: {zoneFromUrl.name}
+              </span>
+            )}
           </div>
           <div className="flex gap-2 overflow-x-auto no-scrollbar">
             {EXPLORE_CATEGORY_CHIPS.map((category) => (
@@ -306,6 +307,13 @@ export function MapView() {
           markers={mapMarkers}
           cameraTarget={cameraTarget}
           fitBounds={fitBoundsForMap}
+          highlightedMarkerId={
+            selectedEvent
+              ? `evt:${selectedEvent}`
+              : selectedPlace
+                ? `plc:${selectedPlace.id}`
+                : null
+          }
           onMarkerClick={(id) => {
             if (id.startsWith('plc:')) {
               setSelectedEvent(null);
@@ -348,7 +356,10 @@ export function MapView() {
                     setSelectedEvent(null);
                     setSelectedPlace(null);
                     closeDirectionsMenus();
-                    router.replace('/map');
+                    const params = new URLSearchParams(searchParams.toString());
+                    params.delete('event');
+                    const q = params.toString();
+                    router.replace(q ? `/map?${q}` : '/map');
                   }}
                   className="absolute top-3 right-3 w-8 h-8 rounded-full bg-[#0a0a0f]/80 backdrop-blur-sm flex items-center justify-center"
                   aria-label="Cerrar"
@@ -441,7 +452,13 @@ export function MapView() {
               <div className="relative p-5">
                 <button
                   type="button"
-                  onClick={() => setSelectedPlace(null)}
+                  onClick={() => {
+                    setSelectedPlace(null);
+                    const params = new URLSearchParams(searchParams.toString());
+                    params.delete('place');
+                    const q = params.toString();
+                    router.replace(q ? `/map?${q}` : '/map');
+                  }}
                   className="absolute top-3 right-3 w-8 h-8 rounded-full bg-[#0a0a0f]/80 backdrop-blur-sm flex items-center justify-center"
                   aria-label="Cerrar"
                 >
@@ -461,6 +478,18 @@ export function MapView() {
                     : `${selectedPlace.event_count} evento${selectedPlace.event_count === 1 ? '' : 's'} publicado${selectedPlace.event_count === 1 ? '' : 's'} aquí.`}
                 </p>
                 <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      router.push(
+                        `/create-event?place=${encodeURIComponent(selectedPlace.id)}`
+                      )
+                    }
+                    className="flex w-full items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 text-white text-sm font-medium"
+                  >
+                    <CalendarPlus className="h-4 w-4 shrink-0" />
+                    Crear evento aquí
+                  </button>
                   <div className="flex gap-3">
                     <button
                       type="button"
@@ -482,7 +511,7 @@ export function MapView() {
                   <button
                     type="button"
                     onClick={() => router.push('/discover')}
-                    className="w-full py-3 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 text-white text-sm"
+                    className="w-full py-3 rounded-xl border border-teal-500/40 bg-teal-600/15 text-teal-100 text-sm"
                   >
                     Ver eventos en descubrir
                   </button>

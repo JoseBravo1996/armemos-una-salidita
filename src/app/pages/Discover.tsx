@@ -1,17 +1,25 @@
 'use client';
 
-import { motion } from 'motion/react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Search, Filter } from 'lucide-react';
 import { BottomNav } from '../components/BottomNav';
 import { EventCard } from '../components/EventCard';
 import { MapboxEventMap } from '../components/map/MapboxEventMap';
-import { EXPLORE_CATEGORY_CHIPS, type ExploreCategoryChipId } from '../data/exploreCategories';
+import {
+  EXPLORE_CATEGORY_CHIPS,
+  type ExploreCategoryChipId,
+  type ExploreTimeFilterId,
+} from '../data/exploreCategories';
+import { TimeSegmentControl } from '../components/TimeSegmentControl';
 import { filterExploreEvents } from '@/lib/explore/filterExploreEvents';
+import { isEventInPast } from '@/lib/events/eventSchedule';
 import { countEventsInZoneBounds } from '@/lib/events/publicExplore';
 import { usePublicExploreData } from '@/hooks/usePublicExploreData';
 import { lngLatBoundsFromPoints } from '@/lib/mapbox/boundsFromPoints';
-import { useMemo, useState } from 'react';
+import { fetchPlacesForMap, type PlaceMapRow } from '@/lib/events/publicExplore';
+import type { MapboxMapMarker } from '../components/map/MapboxEventMap';
+import { startTransition, useEffect, useMemo, useState } from 'react';
 
 function formatResultLabel(count: number, total: number, hasFilters: boolean): string {
   if (total === 0) return 'Sin eventos';
@@ -25,30 +33,86 @@ export function Discover() {
   const { events: allEvents, zones, loading, error, refetch } = usePublicExploreData();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<ExploreCategoryChipId>('all');
+  const [timeSegment, setTimeSegment] = useState<ExploreTimeFilterId>('upcoming');
+  const [catalogPlaces, setCatalogPlaces] = useState<PlaceMapRow[]>([]);
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPlacesForMap()
+      .then((rows) => {
+        if (!cancelled) setCatalogPlaces(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogPlaces([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const hasActiveFilters =
-    selectedCategory !== 'all' || searchQuery.trim().length > 0;
+    selectedCategory !== 'all' ||
+    searchQuery.trim().length > 0 ||
+    timeSegment !== 'upcoming';
+
+  const exploreBase = useMemo(
+    () =>
+      filterExploreEvents(allEvents, {
+        categoryId: selectedCategory,
+        searchQuery,
+        timeFilter: 'all',
+      }),
+    [allEvents, selectedCategory, searchQuery]
+  );
+
+  const segmentTotal = useMemo(() => {
+    if (timeSegment === 'past') {
+      return exploreBase.filter((e) => isEventInPast(e)).length;
+    }
+    return exploreBase.filter((e) => !isEventInPast(e)).length;
+  }, [exploreBase, timeSegment]);
 
   const filteredEvents = useMemo(
     () =>
       filterExploreEvents(allEvents, {
         categoryId: selectedCategory,
         searchQuery,
+        timeFilter: timeSegment,
       }),
-    [allEvents, selectedCategory, searchQuery]
+    [allEvents, selectedCategory, searchQuery, timeSegment]
   );
 
-  const discoverMapMarkers = useMemo(
+  const eventsForZoneCount = useMemo(
     () =>
-      filteredEvents.map((e) => ({
-        id: e.id,
-        latitude: e.latitude,
-        longitude: e.longitude,
-      })),
-    [filteredEvents]
+      filterExploreEvents(allEvents, {
+        categoryId: 'all',
+        searchQuery: '',
+        timeFilter: 'upcoming',
+      }),
+    [allEvents]
   );
+
+  const discoverMapMarkers = useMemo((): MapboxMapMarker[] => {
+    const eventMs: MapboxMapMarker[] = filteredEvents.map((e) => ({
+      id: `evt:${e.id}`,
+      latitude: e.latitude,
+      longitude: e.longitude,
+      kind: 'event',
+      category: e.category,
+    }));
+    const placeMs: MapboxMapMarker[] = catalogPlaces
+      .filter((p) => selectedCategory === 'all' || p.pinCategory === selectedCategory)
+      .map((p) => ({
+        id: `plc:${p.id}`,
+        latitude: p.latitude,
+        longitude: p.longitude,
+        kind: 'place',
+        category: p.pinCategory,
+      }));
+    return [...eventMs, ...placeMs];
+  }, [filteredEvents, catalogPlaces, selectedCategory]);
 
   const discoverMapFitBounds = useMemo(
     () =>
@@ -59,18 +123,31 @@ export function Discover() {
     [discoverMapMarkers]
   );
 
+  const discoverMapPinCountLabel = useMemo(() => {
+    const nEv = filteredEvents.length;
+    const nPl = catalogPlaces.filter(
+      (p) => selectedCategory === 'all' || p.pinCategory === selectedCategory
+    ).length;
+    if (nEv === 0 && nPl === 0) return 'Sin pins con los filtros actuales.';
+    const parts: string[] = [];
+    if (nEv > 0) parts.push(`${nEv} ${nEv === 1 ? 'evento' : 'eventos'}`);
+    if (nPl > 0) parts.push(`${nPl} ${nPl === 1 ? 'lugar' : 'lugares'}`);
+    return `${parts.join(' · ')} en el mapa rápido.`;
+  }, [filteredEvents, catalogPlaces, selectedCategory]);
+
   const popularZonesWithCounts = useMemo(
     () =>
       zones.map((zone) => ({
         zone,
-        count: countEventsInZoneBounds(allEvents, zone),
+        count: countEventsInZoneBounds(eventsForZoneCount, zone),
       })),
-    [zones, allEvents]
+    [zones, eventsForZoneCount]
   );
 
   const clearFilters = () => {
     setSearchQuery('');
     setSelectedCategory('all');
+    setTimeSegment('upcoming');
   };
 
   return (
@@ -119,43 +196,40 @@ export function Discover() {
       </div>
 
       <div className="max-w-lg mx-auto px-6 py-6">
+        <TimeSegmentControl
+          value={timeSegment}
+          onChange={setTimeSegment}
+          className="mb-5"
+        />
+
         {/* Categories — mismos ids que MapView y categoría en Supabase */}
         <div className="flex gap-2 mb-6 overflow-x-auto no-scrollbar pb-2">
           {EXPLORE_CATEGORY_CHIPS.map((category) => (
-            <motion.button
+            <button
               key={category.id}
               type="button"
-              whileTap={{ scale: 0.95 }}
               onClick={() => setSelectedCategory(category.id)}
-              className={`px-4 py-2 rounded-full whitespace-nowrap transition-all flex items-center gap-2 ${
+              className={`flex touch-manipulation items-center gap-2 whitespace-nowrap rounded-full px-4 py-2 transition-colors duration-150 active:opacity-90 ${
                 selectedCategory === category.id
                   ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
-                  : 'bg-[#16161d] border border-[#2a2a3a] text-gray-300 hover:border-purple-500'
+                  : 'border border-[#2a2a3a] bg-[#16161d] text-gray-300 hover:border-purple-500'
               }`}
             >
               <span aria-hidden>{category.emoji}</span>
               <span>{category.label}</span>
-            </motion.button>
+            </button>
           ))}
         </div>
 
         {/* Featured Section */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
-        >
+        <div className="mb-8">
           <div className="mb-2 flex items-end justify-between gap-2">
             <h2 className="text-xl">Destacados en el mapa</h2>
             {hasActiveFilters && (
               <p className="text-xs text-gray-500 shrink-0">Misma vista que la lista</p>
             )}
           </div>
-          <p className="text-sm text-gray-500 mb-4">
-            {filteredEvents.length === 0
-              ? 'Sin pins con los filtros actuales.'
-              : `${filteredEvents.length} ${filteredEvents.length === 1 ? 'lugar' : 'lugares'} en el mapa rápido.`}
-          </p>
+          <p className="text-sm text-gray-500 mb-4">{discoverMapPinCountLabel}</p>
 
           {/* Mapa rápido: misma lista filtrada que abajo */}
           <div className="relative mb-4 h-48 overflow-hidden rounded-3xl border border-purple-500/30 bg-[#0a0a0f]">
@@ -169,30 +243,40 @@ export function Discover() {
               markers={discoverMapMarkers}
               embed
               fitBounds={discoverMapMarkers.length > 0 ? discoverMapFitBounds : null}
-              onMarkerClick={(id) => router.push(`/map?event=${encodeURIComponent(id)}`)}
+              onMarkerClick={(id) => {
+                startTransition(() => {
+                  if (id.startsWith('plc:')) {
+                    router.push(`/map?place=${encodeURIComponent(id.slice(4))}`);
+                    return;
+                  }
+                  const raw = id.startsWith('evt:') ? id.slice(4) : id;
+                  router.push(`/map?event=${encodeURIComponent(raw)}`);
+                });
+              }}
             />
             <div
               className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-24 bg-gradient-to-t from-[#0a0a0f] via-[#0a0a0f]/70 to-transparent"
               aria-hidden
             />
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center pb-3 pt-8">
-              <button
-                type="button"
-                onClick={() => router.push('/map')}
-                className="pointer-events-auto rounded-full bg-gradient-to-r from-purple-600 to-pink-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg"
+              <Link
+                href="/map"
+                prefetch
+                scroll={false}
+                className="pointer-events-auto touch-manipulation rounded-full bg-gradient-to-r from-purple-600 to-pink-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg transition-opacity duration-150 active:opacity-90"
               >
                 Ver mapa completo
-              </button>
+              </Link>
             </div>
           </div>
-        </motion.div>
+        </div>
 
         {/* Events list */}
         <div className="mb-4">
           <div className="flex items-center justify-between mb-4 gap-2">
             <h2 className="text-xl shrink-0">Eventos disponibles</h2>
             <span className="text-sm text-gray-500 text-right">
-              {formatResultLabel(filteredEvents.length, allEvents.length, hasActiveFilters)}
+              {formatResultLabel(filteredEvents.length, segmentTotal, hasActiveFilters)}
             </span>
           </div>
 
@@ -200,7 +284,9 @@ export function Discover() {
             <div className="rounded-2xl border border-[#2a2a3a] bg-[#16161d]/50 px-6 py-10 text-center">
               <p className="text-gray-400 mb-2">No hay eventos que coincidan.</p>
               <p className="text-sm text-gray-500 mb-4">
-                Probá otras palabras, otra categoría, o limpiá filtros para ver todo el catálogo.
+                {timeSegment === 'past'
+                  ? 'No hay eventos pasados con estos filtros. Probá “Próximos” o limpiá filtros.'
+                  : 'Probá otras palabras, otra categoría, la pestaña “Pasados”, o limpiá filtros.'}
               </p>
               <button
                 type="button"
@@ -212,64 +298,57 @@ export function Discover() {
             </div>
           ) : (
             <div className="space-y-4">
-              {filteredEvents.map((event, index) => (
-                <motion.div
-                  key={event.id}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: Math.min(index * 0.05, 0.35) }}
-                >
-                  <EventCard event={event} onClick={() => router.push(`/event/${event.id}`)} />
-                </motion.div>
+              {filteredEvents.map((event) => (
+                <div key={event.id}>
+                  <EventCard
+                    event={event}
+                    onClick={() =>
+                      startTransition(() => {
+                        router.push(`/event/${event.id}`);
+                      })
+                    }
+                  />
+                </div>
               ))}
             </div>
           )}
         </div>
 
         {/* Lugares populares: bounds en Supabase; tap abre el mapa encuadrado en la zona */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
-          className="mt-8"
-        >
+        <div className="mt-8">
           <h2 className="text-xl mb-1">Lugares populares</h2>
           <p className="text-sm text-gray-500 mb-4">
             Tap para abrir el mapa centrado en esa zona (según bounding box en base de datos).
           </p>
           <div className="grid grid-cols-2 gap-4">
-            {popularZonesWithCounts.map(({ zone, count }, index) => (
-              <motion.button
+            {popularZonesWithCounts.map(({ zone, count }) => (
+              <Link
                 key={zone.id}
-                type="button"
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.08 + index * 0.05 }}
-                className="relative h-36 rounded-2xl overflow-hidden text-left ring-0 focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:outline-none"
+                href={`/map?zone=${encodeURIComponent(zone.id)}`}
+                prefetch
+                scroll={false}
+                className="relative h-36 overflow-hidden rounded-2xl text-left ring-0 transition-opacity duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 active:opacity-90"
                 aria-label={`Ver mapa en ${zone.name}`}
-                onClick={() =>
-                  router.push(`/map?zone=${encodeURIComponent(zone.id)}`)
-                }
               >
                 <img
                   src={zone.image_url}
                   alt=""
-                  className="absolute inset-0 w-full h-full object-cover"
+                  className="absolute inset-0 h-full w-full object-cover"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/35 to-transparent" />
                 <div className="absolute bottom-3 left-3 right-3">
-                  <h4 className="text-white text-sm font-medium mb-0.5">{zone.name}</h4>
-                  <p className="text-xs text-gray-300 line-clamp-1">{zone.area_hint}</p>
-                  <p className="text-[11px] text-purple-300 mt-1">
+                  <h4 className="mb-0.5 text-sm font-medium text-white">{zone.name}</h4>
+                  <p className="line-clamp-1 text-xs text-gray-300">{zone.area_hint}</p>
+                  <p className="mt-1 text-[11px] text-purple-300">
                     {count === 0
                       ? '0 eventos en esta zona'
                       : `${count} ${count === 1 ? 'evento' : 'eventos'}`}
                   </p>
                 </div>
-              </motion.button>
+              </Link>
             ))}
           </div>
-        </motion.div>
+        </div>
       </div>
 
       <BottomNav />

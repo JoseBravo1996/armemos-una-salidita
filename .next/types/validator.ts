@@ -65,6 +65,15 @@ type RouteHandlerConfig<Route extends AppRouteHandlerRoutes = AppRouteHandlerRou
   type __Unused = __Check
 }
 
+// Validate ../../src/app/event/[eventId]/edit/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/event/[eventId]/edit">> = Specific
+  const handler = {} as typeof import("../../src/app/event/[eventId]/edit/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
 // Validate ../../src/app/event/[eventId]/page.tsx
 {
   type __IsExpected<Specific extends AppPageConfig<"/event/[eventId]">> = Specific

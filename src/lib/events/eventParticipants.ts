@@ -2,6 +2,7 @@ import type { Event, User } from '@/app/data/mockData';
 import { createClient } from '@/lib/supabase/client';
 import type { PublicEventRow } from '@/lib/events/publicExplore';
 import { mapPublicEventRowToEvent } from '@/lib/events/publicExplore';
+import { isEventInPast } from '@/lib/events/eventSchedule';
 
 type ProfileRow = {
   id: string;
@@ -109,6 +110,24 @@ export async function joinEventAsGoing(
   userId: string
 ): Promise<void> {
   const supabase = createClient();
+  const { data: row, error: loadErr } = await supabase
+    .from('public_events')
+    .select('event_date, event_time')
+    .eq('id', eventId)
+    .eq('published', true)
+    .maybeSingle();
+
+  if (loadErr) throw loadErr;
+  if (!row) throw new Error('No encontramos este evento o no está publicado.');
+  if (
+    isEventInPast({
+      date: row.event_date as string,
+      time: row.event_time as string,
+    })
+  ) {
+    throw new Error('Este evento ya ocurrió; no podés confirmar asistencia.');
+  }
+
   const { error } = await supabase.from('event_participants').upsert(
     {
       event_id: eventId,

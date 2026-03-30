@@ -1,7 +1,6 @@
 'use client';
 
 import { Plus } from 'lucide-react';
-import { motion } from 'motion/react';
 
 interface FloatingActionButtonProps {
   onClick: () => void;
@@ -9,16 +8,16 @@ interface FloatingActionButtonProps {
 
 export function FloatingActionButton({ onClick }: FloatingActionButtonProps) {
   return (
-    <motion.button
-      whileHover={{ scale: 1.1 }}
-      whileTap={{ scale: 0.9 }}
+    <button
+      type="button"
       onClick={onClick}
-      className="fixed bottom-24 right-6 w-16 h-16 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 shadow-2xl flex items-center justify-center z-40"
+      className="fixed bottom-24 right-6 z-40 flex h-16 w-16 touch-manipulation items-center justify-center rounded-full bg-gradient-to-br from-purple-600 to-pink-600 shadow-2xl transition-transform duration-150 active:scale-95 motion-reduce:active:scale-100"
       style={{
-        boxShadow: '0 10px 40px rgba(139, 92, 246, 0.5)'
+        boxShadow: '0 10px 40px rgba(139, 92, 246, 0.5)',
       }}
+      aria-label="Crear evento"
     >
-      <Plus className="w-8 h-8 text-white" />
-    </motion.button>
+      <Plus className="h-8 w-8 text-white" />
+    </button>
   );
 }

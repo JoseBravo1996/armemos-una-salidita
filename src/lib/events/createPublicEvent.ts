@@ -4,12 +4,19 @@ import type { MapboxGeocodeFeatureDTO } from '@/types/mapboxGeocode';
 
 export type PlaceSelection = MapboxGeocodeFeatureDTO;
 
-/** Reutiliza lugar por mapbox_id o crea uno nuevo. Devuelve place.id */
+/** Reutiliza lugar por mapbox_id o crea uno nuevo. `keep:none` = evento sin `place_id`. */
 export async function ensurePlaceFromMapbox(
   selection: PlaceSelection,
   userId: string
-): Promise<string> {
+): Promise<string | null> {
   const supabase = createClient();
+
+  /** Edición: conservar fila `places` existente vinculada al evento. */
+  if (selection.mapboxId.startsWith('keep:')) {
+    const rest = selection.mapboxId.slice('keep:'.length);
+    if (rest === 'none' || rest === '') return null;
+    return rest;
+  }
 
   const { data: existing, error: findErr } = await supabase
     .from('places')
@@ -85,4 +92,40 @@ export async function createPublicEventRow(params: {
 
   if (error) throw error;
   return data.id as string;
+}
+
+export async function updatePublicEventRow(params: {
+  eventId: string;
+  title: string;
+  description: string;
+  eventDate: string;
+  eventTime: string;
+  locationLabel: string;
+  latitude: number;
+  longitude: number;
+  category: Event['category'];
+  placeId: string | null;
+  imageUrl?: string | null;
+}): Promise<void> {
+  const supabase = createClient();
+  const patch: Record<string, unknown> = {
+    title: params.title,
+    description: params.description,
+    event_date: params.eventDate,
+    event_time: params.eventTime,
+    location_label: params.locationLabel,
+    latitude: params.latitude,
+    longitude: params.longitude,
+    category: params.category,
+    place_id: params.placeId,
+    updated_at: new Date().toISOString(),
+  };
+  if (params.imageUrl !== undefined) {
+    patch.image_url = params.imageUrl;
+  }
+  const { error } = await supabase
+    .from('public_events')
+    .update(patch)
+    .eq('id', params.eventId);
+  if (error) throw error;
 }

@@ -1,5 +1,14 @@
 import type { MapboxGeocodeFeatureDTO } from '@/types/mapboxGeocode';
 
+/**
+ * Mapbox interpreta consultas del tipo `lat,lng` en forward search como reverse geocoding,
+ * lo que con `limit` + `types` devuelve error ("limit must be combined with a single type…").
+ */
+export function looksLikeMapboxCoordinatePairQuery(q: string): boolean {
+  const t = q.trim().replace(/\s+/g, '');
+  return /^-?\d{1,3}\.\d+,-?\d{1,3}\.\d+$/.test(t);
+}
+
 export function buildMapboxGeocodeSearchUrl(query: string, accessToken: string): string {
   const path = encodeURIComponent(query.trim());
   const token = encodeURIComponent(accessToken.trim());

@@ -14,6 +14,14 @@ export const EXPLORE_CATEGORY_CHIPS = [
 
 export type ExploreCategoryChipId = (typeof EXPLORE_CATEGORY_CHIPS)[number]['id'];
 
+/** Próximos vs pasados en listados (Descubrir / Home). */
+export type ExploreTimeFilterId = 'upcoming' | 'past';
+
+export const EXPLORE_TIME_TABS = [
+  { id: 'upcoming' as const, label: 'Próximos' },
+  { id: 'past' as const, label: 'Pasados' },
+] as const;
+
 /** Términos extra para buscar por tipo (texto libre alineado al mock / futura API). */
 export const CATEGORY_SEARCH_SYNONYMS: Record<Event['category'], string> = {
   bar: 'bar bares birra cerveza after barra',

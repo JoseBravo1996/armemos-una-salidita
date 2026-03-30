@@ -5,6 +5,7 @@ import { MapPin } from 'lucide-react';
 import type { MapboxGeocodeFeatureDTO } from '@/types/mapboxGeocode';
 import {
   buildMapboxGeocodeSearchUrl,
+  looksLikeMapboxCoordinatePairQuery,
   mapGeocodeJsonToFeatures,
 } from '@/lib/mapbox/geocode';
 
@@ -34,7 +35,7 @@ export function LocationAutocomplete({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const fetchSuggestions = useCallback(async (q: string) => {
-    if (q.length < 2) {
+    if (q.length < 2 || looksLikeMapboxCoordinatePairQuery(q)) {
       setSuggestions([]);
       return;
     }
@@ -72,8 +73,10 @@ export function LocationAutocomplete({
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (valueLabel.trim().length < 2) {
+    const v = valueLabel.trim();
+    if (v.length < 2 || looksLikeMapboxCoordinatePairQuery(v)) {
       setSuggestions([]);
+      if (looksLikeMapboxCoordinatePairQuery(v)) setError(null);
       return;
     }
     debounceRef.current = setTimeout(() => {
@@ -120,7 +123,9 @@ export function LocationAutocomplete({
         <p className="mt-1.5 text-xs text-emerald-400">Ubicación confirmada con coordenadas</p>
       )}
       {error && <p className="mt-1.5 text-xs text-amber-400">{error}</p>}
-      {open && valueLabel.trim().length >= 2 && (
+      {open &&
+        valueLabel.trim().length >= 2 &&
+        !looksLikeMapboxCoordinatePairQuery(valueLabel.trim()) && (
         <ul
           id={listId}
           role="listbox"

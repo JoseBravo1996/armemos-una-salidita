@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'motion/react';
-import { X, Calendar, Clock, Users, Image as ImageIcon } from 'lucide-react';
+import { X, Calendar, CalendarPlus, Clock, Users, Image as ImageIcon } from 'lucide-react';
 import { users } from '../data/mockData';
 import type { Event } from '../data/mockData';
 import { EXPLORE_CATEGORY_CHIPS } from '../data/exploreCategories';
@@ -17,11 +17,15 @@ import {
 import type { MapboxGeocodeFeatureDTO } from '@/types/mapboxGeocode';
 import { uploadPublicEventImage } from '@/lib/supabase/eventImageUpload';
 import { joinEventAsGoing } from '@/lib/events/eventParticipants';
+import { getTodayLocalDateYmd, isEventInPast } from '@/lib/events/eventSchedule';
+import { fetchPlaceByIdForCreate } from '@/lib/events/publicExplore';
+import { looksLikeMapboxCoordinatePairQuery } from '@/lib/mapbox/geocode';
 
 const CATEGORY_OPTIONS = EXPLORE_CATEGORY_CHIPS.filter((c) => c.id !== 'all');
 
 export function CreateEvent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const authUser = useAuthUser();
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
@@ -35,6 +39,58 @@ export function CreateEvent() {
   const [formError, setFormError] = useState<string | null>(null);
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
+  const [venueFromMapHint, setVenueFromMapHint] = useState<string | null>(null);
+
+  /** `/create-event?place=<uuid>` desde el mapa: vincula el venue sin buscar de nuevo. */
+  useEffect(() => {
+    const placeId = searchParams.get('place')?.trim();
+    if (!placeId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const row = await fetchPlaceByIdForCreate(placeId);
+        if (cancelled || !row) {
+          if (!cancelled && !row) {
+            setFormError('No encontramos ese lugar en el catálogo.');
+          }
+          return;
+        }
+        const name = row.name.trim();
+        const addr = row.address?.trim() ?? '';
+        const addressIsCoords = looksLikeMapboxCoordinatePairQuery(addr);
+        const locationForInput =
+          addressIsCoords || !addr ? (name || 'Lugar en el mapa') : addr;
+        const labelForEvent =
+          addressIsCoords || !addr
+            ? name || 'Lugar en el mapa'
+            : addr.includes(name)
+              ? addr
+              : `${name}, ${addr}`;
+
+        setLocationLabel(locationForInput);
+        setPlacePick({
+          mapboxId: `keep:${row.id}`,
+          label: labelForEvent,
+          latitude: row.latitude,
+          longitude: row.longitude,
+          placeTypes: row.mapbox_feature_types,
+        });
+        setVenueFromMapHint(row.name);
+        setFormError(null);
+      } catch {
+        if (!cancelled) setFormError('No se pudo cargar el lugar. Probá de nuevo.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!placePick || !placePick.mapboxId.startsWith('keep:')) {
+      setVenueFromMapHint(null);
+    }
+  }, [placePick]);
 
   useEffect(() => {
     return () => {
@@ -75,6 +131,15 @@ export function CreateEvent() {
     }
 
     const eventTime = time.length >= 5 ? time.slice(0, 5) : time;
+
+    if (!date?.trim()) {
+      setFormError('Elegí una fecha para el evento.');
+      return;
+    }
+    if (isEventInPast({ date, time: eventTime })) {
+      setFormError('La fecha y hora del evento deben ser futuras.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -157,6 +222,16 @@ export function CreateEvent() {
           </p>
         )}
 
+        {venueFromMapHint && placePick && (
+          <p className="flex items-start gap-2 rounded-xl border border-teal-500/35 bg-teal-500/10 px-4 py-3 text-sm text-teal-100">
+            <CalendarPlus className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" />
+            <span>
+              Lugar desde el mapa: <strong className="text-white">{venueFromMapHint}</strong>. Podés
+              cambiar la ubicación buscando otra dirección.
+            </span>
+          </p>
+        )}
+
         <label className="relative block h-48 rounded-3xl overflow-hidden border-2 border-dashed border-purple-500/30 bg-gradient-to-br from-purple-600/20 to-pink-600/20 cursor-pointer hover:border-purple-500 transition-all">
           <input
             type="file"
@@ -225,6 +300,7 @@ export function CreateEvent() {
             <input
               type="date"
               value={date}
+              min={getTodayLocalDateYmd()}
               onChange={(e) => setDate(e.target.value)}
               className="w-full px-4 py-4 rounded-2xl bg-[#16161d] border border-[#2a2a3a] text-white focus:border-purple-500 focus:outline-none transition-all"
               required

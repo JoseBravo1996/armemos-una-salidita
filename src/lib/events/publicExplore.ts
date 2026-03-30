@@ -1,4 +1,6 @@
 import type { Event } from '@/app/data/mockData';
+import { inferPlacePinCategory } from '@/lib/map/inferPlacePinCategory';
+import type { MapPinCategory } from '@/lib/map/inferPlacePinCategory';
 import { createClient } from '@/lib/supabase/client';
 
 /** Fila de `public.public_events` (Supabase). */
@@ -29,6 +31,8 @@ export interface PlaceMapRow {
   latitude: number;
   longitude: number;
   event_count: number;
+  /** Categoría visual del pin (OSM amenity / leisure, etc.). */
+  pinCategory: MapPinCategory;
 }
 
 export interface ExploreZoneRow {
@@ -85,17 +89,76 @@ export async function fetchPublicEvents(): Promise<Event[]> {
   return ((data ?? []) as PublicEventRow[]).map(mapPublicEventRowToEvent);
 }
 
-export async function fetchPlacesForMap(): Promise<PlaceMapRow[]> {
-               const supabase = createClient();
-               const { data, error } = await supabase
-                 .from('places')
-                 .select('id, name, address, latitude, longitude, event_count')
-                 .order('event_count', { ascending: false })
-                 .order('popularity_score', { ascending: false });
+type PlaceMapDbRow = {
+  id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  event_count: number;
+  mapbox_feature_types: string[] | null;
+  source_payload: Record<string, unknown> | null;
+};
 
-               if (error) throw error;
-               return (data ?? []) as PlaceMapRow[];
-             }
+/** Una fila `places` para precargar crear evento desde el mapa. */
+export async function fetchPlaceByIdForCreate(
+  placeId: string
+): Promise<{
+  id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  mapbox_feature_types: string[];
+} | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('places')
+    .select('id, name, address, latitude, longitude, mapbox_feature_types')
+    .eq('id', placeId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+  const row = data as {
+    id: string;
+    name: string;
+    address: string;
+    latitude: number;
+    longitude: number;
+    mapbox_feature_types: string[] | null;
+  };
+  return {
+    id: row.id,
+    name: row.name,
+    address: row.address,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    mapbox_feature_types: row.mapbox_feature_types ?? [],
+  };
+}
+
+export async function fetchPlacesForMap(): Promise<PlaceMapRow[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('places')
+    .select(
+      'id, name, address, latitude, longitude, event_count, mapbox_feature_types, source_payload'
+    )
+    .order('event_count', { ascending: false })
+    .order('popularity_score', { ascending: false });
+
+  if (error) throw error;
+  return ((data ?? []) as PlaceMapDbRow[]).map((row) => ({
+    id: row.id,
+    name: row.name,
+    address: row.address,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    event_count: row.event_count,
+    pinCategory: inferPlacePinCategory(row.source_payload, row.mapbox_feature_types ?? []),
+  }));
+}
 
 export async function fetchExploreZones(): Promise<ExploreZoneRow[]> {
   const supabase = createClient();
@@ -108,7 +171,9 @@ export async function fetchExploreZones(): Promise<ExploreZoneRow[]> {
   return (data ?? []) as ExploreZoneRow[];
 }
 
-export async function fetchPublicEventById(id: string): Promise<Event | null> {
+export async function fetchPublicEventRowById(
+  id: string
+): Promise<PublicEventRow | null> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from('public_events')
@@ -118,6 +183,10 @@ export async function fetchPublicEventById(id: string): Promise<Event | null> {
     .maybeSingle();
 
   if (error) throw error;
-  if (!data) return null;
-  return mapPublicEventRowToEvent(data as PublicEventRow);
+  return data ? (data as PublicEventRow) : null;
+}
+
+export async function fetchPublicEventById(id: string): Promise<Event | null> {
+  const row = await fetchPublicEventRowById(id);
+  return row ? mapPublicEventRowToEvent(row) : null;
 }

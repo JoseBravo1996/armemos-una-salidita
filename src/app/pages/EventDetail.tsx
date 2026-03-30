@@ -3,7 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
-import { ArrowLeft, Calendar, Clock, MapPin, MessageCircle, Share2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Calendar,
+  Clock,
+  MapPin,
+  MessageCircle,
+  Pencil,
+  Share2,
+} from 'lucide-react';
 import type { User } from '../data/mockData';
 import { events as mockEvents, votingOptions, currentUser, users } from '../data/mockData';
 import { AvatarGroup } from '../components/AvatarGroup';
@@ -18,6 +26,7 @@ import {
   joinEventAsGoing,
   leaveEvent,
 } from '@/lib/events/eventParticipants';
+import { isEventInPast } from '@/lib/events/eventSchedule';
 
 export function EventDetail() {
   const params = useParams();
@@ -124,10 +133,13 @@ export function EventDetail() {
   const totalVotes = votingOptions.reduce((sum, opt) => sum + opt.votes.length, 0);
 
   const hasJoined = remoteEvent ? dbJoined : demoJoined;
+  const eventHasPassed = isEventInPast(event);
+  const cannotNewRsvp = eventHasPassed && !hasJoined;
 
   const handleToggleJoin = async () => {
     setRsvpActionError(null);
     if (!remoteEvent) {
+      if (eventHasPassed && !demoJoined) return;
       setDemoJoined((j) => !j);
       return;
     }
@@ -136,6 +148,10 @@ export function EventDetail() {
       return;
     }
     if (!rsvpReady) return;
+    if (!dbJoined && eventHasPassed) {
+      setRsvpActionError('Este evento ya ocurrió; no podés confirmar asistencia.');
+      return;
+    }
     try {
       if (dbJoined) {
         await leaveEvent(eventId, authUser.id);
@@ -192,9 +208,26 @@ export function EventDetail() {
           <ArrowLeft className="w-5 h-5 text-white" />
         </button>
 
-        <button className="absolute top-6 right-6 w-10 h-10 rounded-full bg-[#0a0a0f]/80 backdrop-blur-lg flex items-center justify-center">
-          <Share2 className="w-5 h-5 text-white" />
-        </button>
+        <div className="absolute top-6 right-6 flex items-center gap-2">
+          {remoteEvent && authUser?.id && event.createdBy === authUser.id && (
+            <button
+              type="button"
+              onClick={() => router.push(`/event/${eventId}/edit`)}
+              className="w-10 h-10 rounded-full bg-[#0a0a0f]/80 backdrop-blur-lg flex items-center justify-center"
+              title="Editar evento"
+              aria-label="Editar evento"
+            >
+              <Pencil className="w-5 h-5 text-white" />
+            </button>
+          )}
+          <button
+            type="button"
+            className="w-10 h-10 rounded-full bg-[#0a0a0f]/80 backdrop-blur-lg flex items-center justify-center"
+            aria-label="Compartir"
+          >
+            <Share2 className="w-5 h-5 text-white" />
+          </button>
+        </div>
       </div>
 
       <div className="max-w-lg mx-auto px-6 -mt-8 relative z-10">
@@ -250,19 +283,23 @@ export function EventDetail() {
               <AvatarGroup users={avatarUsers} max={5} />
             </div>
             <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+              whileHover={cannotNewRsvp ? undefined : { scale: 1.05 }}
+              whileTap={cannotNewRsvp ? undefined : { scale: 0.95 }}
               onClick={() => void handleToggleJoin()}
-              disabled={Boolean(remoteEvent && !rsvpReady)}
-              className={`px-6 py-3 rounded-xl transition-all disabled:opacity-50 ${
+              disabled={Boolean((remoteEvent && !rsvpReady) || cannotNewRsvp)}
+              className={`px-6 py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                 hasJoined ? 'bg-purple-600 text-white' : 'bg-[#2a2a3a] text-gray-300'
               }`}
             >
               {remoteEvent && !rsvpReady
                 ? '…'
-                : hasJoined
-                  ? 'Asistiendo'
-                  : 'Unirse'}
+                : cannotNewRsvp
+                  ? 'Evento finalizado'
+                  : hasJoined
+                    ? eventHasPassed
+                      ? 'Asististe'
+                      : 'Asistiendo'
+                    : 'Unirse'}
             </motion.button>
           </div>
 

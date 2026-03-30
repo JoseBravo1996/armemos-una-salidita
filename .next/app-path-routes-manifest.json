@@ -1,0 +1,15 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/api/mapbox/geocode/route": "/api/mapbox/geocode",
+  "/auth/callback/route": "/auth/callback",
+  "/discover/page": "/discover",
+  "/login/page": "/login",
+  "/event/[eventId]/page": "/event/[eventId]",
+  "/home/page": "/home",
+  "/profile/page": "/profile",
+  "/create-event/page": "/create-event",
+  "/event/[eventId]/edit/page": "/event/[eventId]/edit",
+  "/map/page": "/map",
+  "/page": "/",
+  "/notifications/page": "/notifications"
+}
